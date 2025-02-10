@@ -31,16 +31,26 @@ import com.sun.source.tree.MemberReferenceTree;
 import com.sun.source.tree.MethodInvocationTree;
 import com.sun.source.tree.MethodTree;
 import com.sun.source.tree.ReturnTree;
+import com.sun.source.util.TreePath;
 import com.sun.tools.javac.code.Symbol;
 import com.sun.tools.javac.code.Types;
+import com.sun.tools.javac.util.Context;
+import com.uber.nullaway.ErrorMessage;
 import com.uber.nullaway.NullAway;
 import com.uber.nullaway.Nullness;
+import com.uber.nullaway.dataflow.AccessPath;
+import com.uber.nullaway.dataflow.AccessPathNullnessAnalysis;
 import com.uber.nullaway.dataflow.AccessPathNullnessPropagation;
 import com.uber.nullaway.dataflow.NullnessStore;
+import com.uber.nullaway.dataflow.cfg.NullAwayCFGBuilder;
 import java.util.List;
-import org.checkerframework.dataflow.cfg.UnderlyingAST;
-import org.checkerframework.dataflow.cfg.node.LocalVariableNode;
-import org.checkerframework.dataflow.cfg.node.MethodInvocationNode;
+import java.util.Optional;
+import java.util.function.Predicate;
+import org.checkerframework.nullaway.dataflow.cfg.UnderlyingAST;
+import org.checkerframework.nullaway.dataflow.cfg.node.FieldAccessNode;
+import org.checkerframework.nullaway.dataflow.cfg.node.LocalVariableNode;
+import org.checkerframework.nullaway.dataflow.cfg.node.MethodInvocationNode;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Provides a default (No-Op) implementation of every method defined by the Handler interface.
@@ -50,7 +60,7 @@ import org.checkerframework.dataflow.cfg.node.MethodInvocationNode;
  * interface. Additionally, we can add extensibility points without breaking existing handlers, as
  * long as we define the corresponding No-Op behavior here.
  */
-abstract class BaseNoOpHandler implements Handler {
+public abstract class BaseNoOpHandler implements Handler {
 
   protected BaseNoOpHandler() {
     // We don't allow creating useless handlers, subclass to add real behavior.
@@ -63,35 +73,25 @@ abstract class BaseNoOpHandler implements Handler {
   }
 
   @Override
-  public void onMatchMethod(
-      NullAway analysis, MethodTree tree, VisitorState state, Symbol.MethodSymbol methodSymbol) {
+  public void onMatchMethod(MethodTree tree, MethodAnalysisContext methodAnalysisContext) {
     // NoOp
   }
 
   @Override
   public void onMatchMethodInvocation(
-      NullAway analysis,
-      MethodInvocationTree tree,
-      VisitorState state,
-      Symbol.MethodSymbol methodSymbol) {
+      MethodInvocationTree tree, MethodAnalysisContext methodAnalysisContext) {
     // NoOp
   }
 
   @Override
   public void onMatchLambdaExpression(
-      NullAway analysis,
-      LambdaExpressionTree tree,
-      VisitorState state,
-      Symbol.MethodSymbol methodSymbol) {
+      LambdaExpressionTree tree, MethodAnalysisContext methodAnalysisContext) {
     // NoOp
   }
 
   @Override
   public void onMatchMethodReference(
-      NullAway analysis,
-      MemberReferenceTree tree,
-      VisitorState state,
-      Symbol.MethodSymbol methodSymbol) {
+      MemberReferenceTree tree, MethodAnalysisContext methodAnalysisContext) {
     // NoOp
   }
 
@@ -101,34 +101,56 @@ abstract class BaseNoOpHandler implements Handler {
   }
 
   @Override
-  public ImmutableSet<Integer> onUnannotatedInvocationGetNonNullPositions(
-      NullAway analysis,
-      VisitorState state,
+  public Nullness onOverrideMethodReturnNullability(
       Symbol.MethodSymbol methodSymbol,
-      List<? extends ExpressionTree> actualParams,
-      ImmutableSet<Integer> nonNullPositions) {
-    return nonNullPositions;
+      VisitorState state,
+      boolean isAnnotated,
+      Nullness returnNullness) {
+    // NoOp
+    return returnNullness;
+  }
+
+  @Override
+  public boolean onOverrideFieldNullability(Symbol field) {
+    // NoOp
+    return false;
+  }
+
+  @Override
+  public Nullness[] onOverrideMethodInvocationParametersNullability(
+      Context context,
+      Symbol.MethodSymbol methodSymbol,
+      boolean isAnnotated,
+      Nullness[] argumentPositionNullness) {
+    // NoOp
+    return argumentPositionNullness;
   }
 
   @Override
   public boolean onOverrideMayBeNullExpr(
-      NullAway analysis, ExpressionTree expr, VisitorState state, boolean exprMayBeNull) {
+      NullAway analysis,
+      ExpressionTree expr,
+      @Nullable Symbol exprSymbol,
+      VisitorState state,
+      boolean exprMayBeNull) {
     // NoOp
     return exprMayBeNull;
   }
 
   @Override
-  public NullnessStore.Builder<Nullness> onDataflowInitialStore(
+  public NullnessStore.Builder onDataflowInitialStore(
       UnderlyingAST underlyingAST,
       List<LocalVariableNode> parameters,
-      NullnessStore.Builder<Nullness> result) {
+      NullnessStore.Builder result) {
     return result;
   }
 
   @Override
   public NullnessHint onDataflowVisitMethodInvocation(
       MethodInvocationNode node,
-      Types types,
+      Symbol.MethodSymbol symbol,
+      VisitorState state,
+      AccessPath.AccessPathContext apContext,
       AccessPathNullnessPropagation.SubNodeValues inputs,
       AccessPathNullnessPropagation.Updates thenUpdates,
       AccessPathNullnessPropagation.Updates elseUpdates,
@@ -138,14 +160,77 @@ abstract class BaseNoOpHandler implements Handler {
   }
 
   @Override
+  public NullnessHint onDataflowVisitFieldAccess(
+      FieldAccessNode node,
+      Symbol symbol,
+      Types types,
+      Context context,
+      AccessPath.AccessPathContext apContext,
+      AccessPathNullnessPropagation.SubNodeValues inputs,
+      AccessPathNullnessPropagation.Updates updates) {
+    // NoOp
+    return NullnessHint.UNKNOWN;
+  }
+
+  @Override
   public void onDataflowVisitReturn(
-      ReturnTree tree, NullnessStore<Nullness> thenStore, NullnessStore<Nullness> elseStore) {
+      ReturnTree tree, VisitorState state, NullnessStore thenStore, NullnessStore elseStore) {
     // NoOp
   }
 
   @Override
   public void onDataflowVisitLambdaResultExpression(
-      ExpressionTree tree, NullnessStore<Nullness> thenStore, NullnessStore<Nullness> elseStore) {
+      ExpressionTree tree, NullnessStore thenStore, NullnessStore elseStore) {
     // NoOp
+  }
+
+  @Override
+  public Optional<ErrorMessage> onExpressionDereference(
+      ExpressionTree expr, ExpressionTree baseExpr, VisitorState state) {
+    return Optional.empty();
+  }
+
+  @Override
+  public Predicate<AccessPath> getAccessPathPredicateForNestedMethod(
+      TreePath path, VisitorState state) {
+    return AccessPathPredicates.FALSE_AP_PREDICATE;
+  }
+
+  @Override
+  public ImmutableSet<String> onRegisterImmutableTypes() {
+    return ImmutableSet.of();
+  }
+
+  @Override
+  public void onNonNullFieldAssignment(
+      Symbol field, AccessPathNullnessAnalysis analysis, VisitorState state) {
+    // NoOp
+  }
+
+  @Override
+  public boolean onOverrideTypeParameterUpperBound(String className, int index) {
+    return false;
+  }
+
+  @Override
+  public boolean onOverrideNullMarkedClasses(String className) {
+    return false;
+  }
+
+  @Override
+  public MethodInvocationNode onCFGBuildPhase1AfterVisitMethodInvocation(
+      NullAwayCFGBuilder.NullAwayCFGTranslationPhaseOne phase,
+      MethodInvocationTree tree,
+      MethodInvocationNode originalNode) {
+    return originalNode;
+  }
+
+  @Override
+  public @Nullable Integer castToNonNullArgumentPositionsForMethod(
+      List<? extends ExpressionTree> actualParams,
+      @Nullable Integer previousArgumentPosition,
+      MethodAnalysisContext methodAnalysisContext) {
+    // NoOp
+    return previousArgumentPosition;
   }
 }

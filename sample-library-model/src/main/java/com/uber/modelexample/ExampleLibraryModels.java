@@ -31,6 +31,11 @@ public class ExampleLibraryModels implements LibraryModels {
   }
 
   @Override
+  public ImmutableSetMultimap<MethodRef, Integer> explicitlyNullableParameters() {
+    return ImmutableSetMultimap.of();
+  }
+
+  @Override
   public ImmutableSetMultimap<MethodRef, Integer> nonNullParameters() {
     return ImmutableSetMultimap.of();
   }
@@ -43,7 +48,27 @@ public class ExampleLibraryModels implements LibraryModels {
   }
 
   @Override
+  public ImmutableSetMultimap<MethodRef, Integer> nullImpliesFalseParameters() {
+    return ImmutableSetMultimap.of();
+  }
+
+  @Override
+  public ImmutableSetMultimap<MethodRef, Integer> nullImpliesNullParameters() {
+    return ImmutableSetMultimap.of();
+  }
+
+  @Override
   public ImmutableSet<MethodRef> nullableReturns() {
     return ImmutableSet.of();
+  }
+
+  @Override
+  public ImmutableSet<MethodRef> nonNullReturns() {
+    return ImmutableSet.of();
+  }
+
+  @Override
+  public ImmutableSetMultimap<MethodRef, Integer> castToNonNullMethods() {
+    return ImmutableSetMultimap.of();
   }
 }

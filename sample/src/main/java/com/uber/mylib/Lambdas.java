@@ -5,16 +5,16 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
-import javax.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /** Code that uses Java 8 lambdas */
+@SuppressWarnings("UnusedVariable") // This is sample code
 public class Lambdas {
 
   @FunctionalInterface
   interface RetNullableFunction {
 
-    @Nullable
-    Object getVal();
+    @Nullable Object getVal();
   }
 
   public static void testLambda() {

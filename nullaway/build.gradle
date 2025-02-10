@@ -13,105 +13,194 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+import net.ltgt.gradle.errorprone.CheckSeverity
+
 plugins {
-  id "net.ltgt.errorprone" version "0.0.13"
-  id "com.github.johnrengelman.shadow" version "2.0.2"
-  id "java"
+    id 'java-library'
+    id 'nullaway.java-test-conventions'
 }
 
-// we use this config to get the path of the JDK 9 javac jar, to
-// stick it in the bootclasspath when running tests
-configurations.maybeCreate("epJavac")
+configurations {
+    // A configuration holding the jars for the oldest supported version of Error Prone, to use with tests
+    errorProneOldest
 
-sourceCompatibility = "1.8"
-targetCompatibility = "1.8"
-
-configurations.all {
-    resolutionStrategy {
-        // Force needed, since:
-        // a) There are newer versions of CF than the one we forked
-        // b) It seems x.y.z-name < x.y.z for gradle dependency resolution purposes.
-        force deps.build.checkerDataflow
+    // To resolve the errorprone dependencies for the buildWithNullAway task
+    errorproneExtended {
+        extendsFrom errorprone
+        canBeResolved = true
     }
 }
 
 dependencies {
-    compileOnly deps.apt.autoValue
-    compileOnly deps.apt.autoService
+    compileOnly project(":annotations")
+    compileOnly deps.apt.autoValueAnnot
+    annotationProcessor deps.apt.autoValue
+    compileOnly deps.apt.autoServiceAnnot
+    annotationProcessor deps.apt.autoService
+    // Using api following the guidance at https://jspecify.dev/docs/using#gradle
+    api deps.build.jspecify
+    compileOnly deps.test.jetbrainsAnnotations
+    compileOnly deps.apt.javaxInject
+
 
     compileOnly deps.build.errorProneCheckApi
-    compile deps.build.checkerDataflow
-    shadow deps.build.guava
+    implementation deps.build.checkerDataflow
+    implementation deps.build.guava
 
-    errorprone deps.build.errorProneCore
-
-    testCompile deps.test.junit4
-    testCompile(deps.build.errorProneTestHelpers) {
+    testImplementation project(":annotations")
+    testImplementation deps.test.junit4
+    testImplementation(deps.build.errorProneTestHelpers) {
         exclude group: "junit", module: "junit"
     }
-    testCompile deps.test.jetbrainsAnnotations
-    testCompile deps.test.junit5Jupiter
-    testCompile deps.test.cfQual
-    testCompile deps.test.cfCompatQual
-    testCompile deps.test.inferAnnotations
-    testCompile deps.apt.javaxInject
-    testCompile deps.test.rxjava2
+    testImplementation deps.test.jetbrainsAnnotations
+    testImplementation deps.test.junit5Jupiter
+    testImplementation deps.test.cfQual
+    testImplementation deps.test.cfCompatQual
+    testImplementation deps.build.jspecify
+    testImplementation project(":test-java-lib")
+    testImplementation deps.apt.jakartaInject
+    testImplementation deps.apt.javaxInject
+    testImplementation deps.test.rxjava2
+    testImplementation deps.test.commonsLang
+    testImplementation deps.test.commonsLang3
+    testImplementation project(":test-library-models")
+    testImplementation deps.test.lombok
+    testImplementation deps.test.springBeans
+    testImplementation deps.test.springContext
+    testImplementation deps.test.grpcCore
+    testImplementation project(":test-java-lib-lombok")
+    testImplementation deps.test.mockito
+    testImplementation deps.test.javaxAnnotationApi
+    testImplementation deps.test.assertJ
+    // This is for a test exposing a CFG construction failure in the Checker Framework.  We can probably remove it once
+    // the issue is fixed upstream and we update. See https://github.com/typetools/checker-framework/issues/6396.
+    testImplementation 'org.apache.spark:spark-sql_2.12:3.3.2'
 
-    epJavac deps.build.errorProneCheckApi
-    epJavac deps.build.checkerDataflow
+    errorProneOldest deps.build.errorProneCheckApiOld
+    errorProneOldest(deps.build.errorProneTestHelpersOld) {
+        exclude group: "junit", module: "junit"
+    }
 }
-
-// We include and shade the checker framework jars into the NullAway jar, as we may have custom
-// changes.
-shadowJar {
-    // set classifier to null since we want the artifact uploaded to Maven Central to be the
-    // shadow jar.  Without this, the shadow jar is built with a '-all' suffix in the name.
-    classifier = null
-    relocate "org.checkerframework", "shadow.checkerframework"
-}
-// Since we set classifier to null above, both the normal jar artifact and the shadow jar have
-// the same name, which can cause races if we are not careful.  We force shadowJar to depend on
-// jar, so we know that the shadow jar will always overwrite the normal one.  We also force
-// assemble to depend on shadowJar, to avoid races between running tests / signing archives
-// and building the shadow jar.
-//
-// We also require that any other sub-projects only depend on the shadow configuration of this
-// project; otherwise weird races can occur.  Eventually, we should fix this by only renaming the
-// shadow jar artifact before the uploadArchives task runs.
-shadowJar.dependsOn jar
-assemble.dependsOn shadowJar
 
 javadoc {
     failOnError = false
 }
 
-compileJava {
-    options.compilerArgs += ["-Xlint:unchecked", "-Xlint:rawtypes", "-Werror"]
+apply plugin: 'com.vanniktech.maven.publish'
+
+// These --add-exports arguments are required when targeting JDK 11+ since Error Prone and NullAway access a bunch of
+// JDK-internal APIs that are not exposed otherwise.
+tasks.withType(JavaCompile).configureEach {
+    options.compilerArgs += [
+        "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.source.tree=ALL-UNNAMED",
+    ]
 }
 
-test {
-  maxHeapSize = "1024m"
-  jvmArgs "-Xbootclasspath/p:${configurations.epJavac.asPath}"
+// Create a task to test with the oldest supported version of Error Prone
+// (while still building against the latest supported version)
+def epOldestTest = tasks.register("testErrorProneOldest", Test) {
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(11)
+    }
+
+    description = "Runs the test suite using the oldest supported version of Error Prone"
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+
+    // Copy inputs from normal Test task.
+    def testTask = tasks.getByName("test")
+    // A bit of a hack: we add the dependencies of the oldest supported Error Prone version to the _beginning_ of the
+    // classpath, so that they are used instead of the latest version.  This exercises the scenario of building
+    // NullAway against the latest supported Error Prone version but then running on the oldest supported version.
+    classpath = configurations.errorProneOldest + testTask.classpath
+
+    testClassesDirs = testTask.testClassesDirs
+
+    jvmArgs += [
+        "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+        "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED",
+        "--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+        "--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED",
+        // Accessed by Lombok tests
+        "--add-opens=jdk.compiler/com.sun.tools.javac.jvm=ALL-UNNAMED",
+    ]
 }
 
-apply from: rootProject.file("gradle/gradle-mvn-push.gradle")
-
-def configurePomForShadow(pom) {
-  pom.scopeMappings.mappings.remove(project.configurations.compile)
-  pom.scopeMappings.mappings.remove(project.configurations.runtime)
-  pom.scopeMappings.addMapping(MavenPlugin.COMPILE_PRIORITY, project.configurations.shadow, Conf2ScopeMappingContainer.COMPILE)
+tasks.named('check').configure {
+    dependsOn(epOldestTest)
 }
 
-install {
-  repositories.mavenInstaller {
-    configurePomForShadow(pom)
-  }
+// Create a task to build NullAway with NullAway checking enabled
+tasks.register('buildWithNullAway', JavaCompile) {
+    onlyIf {
+        // We only do NullAway checks when compiling against the latest
+        // version of Error Prone (as nullability annotations on the APIs
+        // can change between versions)
+        deps.versions.errorProneApi == deps.versions.errorProneLatest
+    }
+    // Configure compilation to run with Error Prone and NullAway
+    source = sourceSets.main.java
+    classpath = sourceSets.main.compileClasspath
+    destinationDirectory = file("$buildDir/ignoredClasses")
+    options.annotationProcessorPath = files(
+            configurations.errorproneExtended.asCollection(),
+            sourceSets.main.annotationProcessorPath,
+            // This refers to the NullAway jar built from the current source
+            jar.archiveFile.get(),
+            sourceSets.main.compileClasspath)
+    options.errorprone.enabled = true
+    options.errorprone {
+        option("NullAway:AnnotatedPackages", "com.uber,org.checkerframework.nullaway,com.google.common")
+        option("NullAway:CastToNonNullMethod", "com.uber.nullaway.NullabilityUtil.castToNonNull")
+        option("NullAway:CheckOptionalEmptiness")
+        option("NullAway:AcknowledgeRestrictiveAnnotations")
+        option("NullAway:CheckContracts")
+        option("NullAway:JSpecifyMode")
+    }
+    // Make sure the jar has already been built
+    dependsOn 'jar'
+    // Check that the NullAway jar actually exists (without this,
+    // Gradle will run the compilation even if the jar doesn't exist)
+    doFirst {
+        assert jar.archiveFile.get().getAsFile().exists()
+    }
 }
-install.dependsOn shadowJar
 
-uploadArchives {
-  repositories.mavenDeployer {
-    configurePomForShadow(pom)
-  }
+project.tasks.named('check').configure {
+    dependsOn 'buildWithNullAway'
 }
-uploadArchives.dependsOn shadowJar
+
+tasks.withType(Test).configureEach { test ->
+    if (test.javaVersion < JavaVersion.VERSION_22) {
+        // Certain tests involving reading annotations from bytecode will not pass on pre-JDK-22 javac
+        // until the fix for https://bugs.openjdk.org/browse/JDK-8225377 is backported or until we add
+        // workarounds.  See https://github.com/uber/NullAway/issues/1005.
+        test.filter {
+            excludeTestsMatching "com.uber.nullaway.jspecify.BytecodeGenericsTests.genericsChecksForParamPassingAndReturns"
+            excludeTestsMatching "com.uber.nullaway.jspecify.BytecodeGenericsTests.genericsChecksForFieldAssignments"
+        }
+    }
+    // hack: for some reasons the ErrorProneCLIFlagsConfigTest does not pass on EP 2.31.0,
+    // though it passes on both older and newer Error Prone versions (???).  Not worth tracking
+    // down
+    if (deps.versions.errorProneApi == "2.31.0") {
+        test.filter {
+            excludeTestsMatching "com.uber.nullaway.ErrorProneCLIFlagsConfigTest"
+        }
+    }
+}

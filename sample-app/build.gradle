@@ -14,23 +14,15 @@
  * limitations under the License.
  */
 
-buildscript {
-    repositories {
-      // for android gradle plugin 3
-      google()
-    }
-    dependencies {
-        classpath deps.build.gradlePlugins.android
-        classpath "net.ltgt.gradle:gradle-errorprone-plugin:0.0.13"
-    }
-}
+import com.android.build.gradle.api.BaseVariant
+import net.ltgt.gradle.errorprone.CheckSeverity
 
-apply plugin: 'com.android.application'
-apply plugin: 'net.ltgt.errorprone'
+plugins {
+    id('com.android.application')
+}
 
 android {
     compileSdkVersion deps.build.compileSdkVersion
-    buildToolsVersion deps.build.buildToolsVersion
 
     defaultConfig {
         applicationId "com.uber.myapplication"
@@ -40,31 +32,52 @@ android {
         versionName "1.0"
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_7
-        targetCompatibility JavaVersion.VERSION_1_7
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
     }
 
     lintOptions {
         abortOnError false
     }
+
+    DomainObjectSet<BaseVariant> variants = getApplicationVariants() // or getLibraryVariants() in libraries
+    variants.addAll(getTestVariants())
+    variants.addAll(getUnitTestVariants())
+    variants.configureEach { variant ->
+        variant.getJavaCompileProvider().configure {
+            options.compilerArgs += [
+                "-XDcompilePolicy=simple",
+                "--should-stop=ifError=FLOW",
+                "-Xplugin:ErrorProne -XepOpt:NullAway:AnnotatedPackages=com.uber",
+            ]
+            options.fork = true
+            options.forkOptions.jvmArgs = [
+                "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
+                "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED",
+                "--add-exports=jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED",
+                "--add-exports=jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED",
+                "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED",
+                "--add-exports=jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED",
+                "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED",
+                "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED",
+                "--add-opens=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED",
+                "--add-opens=jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED"
+            ]
+        }
+    }
 }
 
 dependencies {
-    compile deps.support.appcompat
-
-    testCompile deps.test.junit4
-
-    annotationProcessor project(path: ":nullaway", configuration: "shadow")
-
+    implementation deps.support.appcompat
+    annotationProcessor deps.build.errorProneCore
+    annotationProcessor project(":nullaway")
     annotationProcessor project(path: ":sample-library-model")
 
-    errorprone "com.google.errorprone:error_prone_core:2.1.3"
+    testImplementation deps.test.junit4
 }
 
-tasks.withType(JavaCompile) {
-  // remove the if condition if you want to run NullAway on test code
-  if (!name.toLowerCase().contains("test")) {
-    options.compilerArgs += ["-Xep:NullAway:ERROR", "-XepOpt:NullAway:AnnotatedPackages=com.uber"]
-  }
+spotless {
+    java {
+        target 'src/*/java/**/*.java'
+    }
 }
-

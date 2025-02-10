@@ -14,38 +14,148 @@
  * limitations under the License.
  */
 
+import net.ltgt.gradle.errorprone.CheckSeverity
+buildscript {
+    repositories {
+        mavenCentral()
+        google() // For Gradle 4.0+
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:7.3.0'
+        classpath 'com.vanniktech:gradle-maven-publish-plugin:0.25.3'
+    }
+}
 plugins {
-  id "com.github.sherter.google-java-format" version "0.6"
+    id "com.diffplug.spotless" version "6.25.0"
+    id "net.ltgt.errorprone" version "4.1.0" apply false
+    id "com.github.johnrengelman.shadow" version "8.1.1" apply false
+    id "me.champeau.jmh" version "0.7.1" apply false
+    id "com.github.ben-manes.versions" version "0.51.0"
+    id "com.felipefzdz.gradle.shellcheck" version "1.5.0"
 }
 
 repositories {
-  // to get the google-java-format jar and dependencies
-  jcenter()
-}
-
-subprojects {
-    buildscript {
-        repositories {
-            jcenter()
-            maven {
-               url "https://plugins.gradle.org/m2/"
-            }
-        }
-    }
-
-    repositories {
-        maven {
-            url "https://raw.githubusercontent.com/msridhar/checker-framework/repository/"
-        }
-        jcenter()
-        google()
-    }
-
-}
-
-
-googleJavaFormat {
-  toolVersion = "1.4"
+    // to get the google-java-format jar and dependencies
+    mavenCentral()
 }
 
 apply from: "gradle/dependencies.gradle"
+
+subprojects { project ->
+    project.apply plugin: "net.ltgt.errorprone"
+    project.dependencies {
+        errorprone deps.build.errorProneCore
+    }
+    project.tasks.withType(JavaCompile) {
+        dependsOn(installGitHooks)
+        // Always compile using JDK 17, independent of the JDK version used to run Gradle.
+        // We can't compile on JDK 21 since some internal javac APIs changed between 17
+        // and 21, and for now NullAway compiles against the JDK 17 APIs and uses reflection
+        // on JDK 21+.  This configuration means compilation will succeed even if Gradle
+        // is running on JDK 21+.
+        javaCompiler = javaToolchains.compilerFor {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+        options.compilerArgs += [
+            "-Xlint:deprecation",
+            "-Xlint:rawtypes",
+            "-Xlint:unchecked",
+            "-Werror",
+            "-parameters",
+        ]
+        options.errorprone {
+            // disable warnings in generated code; AutoValue code fails UnnecessaryParentheses check
+            disableWarningsInGeneratedCode = true
+            // this check is too noisy
+            check("StringSplitter", CheckSeverity.OFF)
+            // https://github.com/google/error-prone/issues/3366
+            check("CanIgnoreReturnValueSuggester", CheckSeverity.OFF)
+            // turn up various checks
+            check("WildcardImport", CheckSeverity.ERROR)
+            check("MissingBraces", CheckSeverity.ERROR)
+            check("TypeToString", CheckSeverity.ERROR)
+            check("SymbolToString", CheckSeverity.ERROR)
+            check("MultipleTopLevelClasses", CheckSeverity.ERROR)
+            check("ClassName", CheckSeverity.ERROR)
+            check("PackageLocation", CheckSeverity.ERROR)
+            check("UnnecessaryAnonymousClass", CheckSeverity.ERROR)
+            check("UnusedException", CheckSeverity.ERROR)
+            check("UnnecessaryFinal", CheckSeverity.ERROR)
+            check("PreferredInterfaceType", CheckSeverity.ERROR)
+            check("AnnotationPosition", CheckSeverity.ERROR)
+            // To enable auto-patching, uncomment the line below, replace [CheckerName] with
+            // the checker(s) you want to apply patches for (comma-separated), and above, disable
+            // "-Werror"
+            // errorproneArgs.addAll("-XepPatchChecks:[CheckerName]", "-XepPatchLocation:IN_PLACE")
+        }
+    }
+
+    // We need to use the older sourceCompatibility / targetCompatibility settings, rather than the newer "release"
+    // option, since we use internal javac APIs, which "release" doesn't allow
+    tasks.withType(JavaCompile) {
+        java.sourceCompatibility = JavaVersion.VERSION_11
+        java.targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    tasks.withType(Test).configureEach {
+        maxParallelForks = Runtime.runtime.availableProcessors().intdiv(2) ?: 1
+    }
+
+    repositories {
+        mavenCentral()
+        google()
+    }
+
+    // Spotless complains when applied to the folders containing projects
+    // when they do not have a build.gradle file
+    if (project.name != "jar-infer" && project.name != "library-model") {
+        project.apply plugin: "com.diffplug.spotless"
+        spotless {
+            java {
+                googleJavaFormat(deps.versions.googlejavaformat)
+            }
+        }
+    }
+}
+
+spotless {
+    predeclareDeps()
+    groovyGradle {
+        target '**/*.gradle'
+        greclipse()
+        indentWithSpaces(4)
+        trimTrailingWhitespace()
+        endWithNewline()
+    }
+}
+spotlessPredeclare {
+    java { googleJavaFormat(deps.versions.googlejavaformat) }
+    groovyGradle {
+        greclipse()
+    }
+}
+
+shellcheck {
+    useDocker = false
+    shellcheckBinary = "shellcheck"
+    sourceFiles =
+            fileTree(".") {
+                include("**/*.sh")
+            }
+}
+
+////////////////////////////////////////////////////////////////////////
+//
+//  Google Java Format pre-commit hook installation
+//
+
+tasks.register('installGitHooks', Copy) {
+    from(file('config/hooks/pre-commit-stub')) {
+        rename 'pre-commit-stub', 'pre-commit'
+    }
+    into file('.git/hooks')
+    filePermissions {
+        unix(0777)
+    }
+}

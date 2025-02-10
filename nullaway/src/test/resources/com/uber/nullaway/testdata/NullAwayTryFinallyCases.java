@@ -122,7 +122,7 @@ public class NullAwayTryFinallyCases {
       }
       System.out.println(o.toString()); // Safe
     } finally {
-      /// ToDo: This should be an error, but isn't.
+      // BUG: Diagnostic contains: dereferenced expression
       System.out.println(o.toString());
     }
   }
@@ -259,7 +259,8 @@ public class NullAwayTryFinallyCases {
       // method... mmh
     }
 
-    // BUG: Diagnostic contains: initializer method does not guarantee @NonNull field g is
+    // BUG: Diagnostic contains: initializer method does not guarantee @NonNull field g (line 228)
+    // is
     // initialized
     Initializers(Object o1, Object o2, Object o3) {
       f = new Object();

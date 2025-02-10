@@ -1,5 +1,38 @@
+pluginManagement {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+        google()
+    }
+}
+
+plugins {
+    // to automatically pull in relevant JDK toolchains when not present on the local machine
+    id("org.gradle.toolchains.foojay-resolver-convention") version "0.8.0"
+}
+
+include ':annotations'
 include ':nullaway'
 include ':sample-library-model'
 include ':sample'
+include ':test-java-lib'
+include ':test-java-lib-lombok'
+include ':test-library-models'
+include ':jar-infer:android-jarinfer-models-sdk28'
+include ':jar-infer:android-jarinfer-models-sdk29'
+include ':jar-infer:android-jarinfer-models-sdk30'
+include ':jar-infer:android-jarinfer-models-sdk31'
+include ':jar-infer:jar-infer-lib'
+include ':jar-infer:jar-infer-cli'
+include ':jar-infer:test-java-lib-jarinfer'
+include ':jar-infer:nullaway-integration-test'
+include ':jmh'
+include ':guava-recent-unit-tests'
+include ':jdk-recent-unit-tests'
+include ':code-coverage-report'
 include ':sample-app'
-include ':compile-bench'
+include ':jar-infer:test-android-lib-jarinfer'
+include ':library-model:library-model-generator'
+include ':library-model:library-model-generator-integration-test'
+include ':library-model:library-model-generator-cli'
+include ':library-model:test-library-model-generator'

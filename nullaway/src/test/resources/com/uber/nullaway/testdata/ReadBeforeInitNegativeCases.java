@@ -24,7 +24,7 @@ package com.uber.nullaway.testdata;
 
 import static com.uber.nullaway.testdata.Util.castToNonNull;
 
-import com.facebook.infer.annotation.Initializer;
+import com.uber.nullaway.annotations.Initializer;
 import javax.annotation.Nullable;
 
 public class ReadBeforeInitNegativeCases {
@@ -272,6 +272,18 @@ public class ReadBeforeInitNegativeCases {
       }
       castF = "hi";
       castG = "bye";
+    }
+  }
+
+  // https://github.com/uber/NullAway/issues/347
+  static class ReadInsideAssert {
+
+    Object f;
+
+    public ReadInsideAssert(Object o) {
+      this.f = o;
+      if (this.f.toString() != "") throw new Error();
+      assert this.f.toString() != "";
     }
   }
 }

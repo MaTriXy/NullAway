@@ -18,9 +18,12 @@
 
 package com.uber.nullaway;
 
+import com.sun.tools.javac.code.Symbol;
+import com.sun.tools.javac.code.Type;
+import com.sun.tools.javac.util.List;
+import java.util.stream.Stream;
 import javax.lang.model.element.AnnotationMirror;
-import javax.lang.model.element.Element;
-import org.checkerframework.dataflow.analysis.AbstractValue;
+import org.checkerframework.nullaway.dataflow.analysis.AbstractValue;
 
 /**
  * Represents one of the possible nullness values in our nullness analysis.
@@ -127,26 +130,170 @@ public enum Nullness implements AbstractValue<Nullness> {
     return displayName;
   }
 
-  private static Nullness nullnessFromAnnotations(Element element) {
-    for (AnnotationMirror anno : NullabilityUtil.getAllAnnotations(element)) {
-      String annotStr = anno.getAnnotationType().toString();
-      if (isNullableAnnotation(annotStr)) {
-        return Nullness.NULLABLE;
-      }
-    }
-    return Nullness.NONNULL;
+  public static boolean hasNullableAnnotation(
+      Stream<? extends AnnotationMirror> annotations, Config config) {
+    return annotations
+        .map(anno -> anno.getAnnotationType().toString())
+        .anyMatch(anno -> isNullableAnnotation(anno, config));
+  }
+
+  public static boolean hasNonNullAnnotation(
+      Stream<? extends AnnotationMirror> annotations, Config config) {
+    return annotations
+        .map(anno -> anno.getAnnotationType().toString())
+        .anyMatch(anno -> isNonNullAnnotation(anno, config));
   }
 
   /**
+   * Check whether an annotation should be treated as equivalent to <code>@Nullable</code>.
+   *
    * @param annotName annotation name
    * @return true if we treat annotName as a <code>@Nullable</code> annotation, false otherwise
    */
-  public static boolean isNullableAnnotation(String annotName) {
+  public static boolean isNullableAnnotation(String annotName, Config config) {
     return annotName.endsWith(".Nullable")
-        || annotName.equals("org.checkerframework.checker.nullness.compatqual.NullableDecl");
+        // endsWith and not equals and no `org.`, because gradle's shadow plug in rewrites strings
+        // and will replace `org.checkerframework` with `shadow.checkerframework`. Yes, really...
+        // I assume it's something to handle reflection.
+        || annotName.endsWith(".checkerframework.checker.nullness.compatqual.NullableDecl")
+        // matches javax.annotation.CheckForNull and edu.umd.cs.findbugs.annotations.CheckForNull
+        || annotName.endsWith(".CheckForNull")
+        // matches any of the multiple @ParametricNullness annotations used within Guava
+        // (see https://github.com/google/guava/issues/6126)
+        // We check the simple name first and the package prefix second for boolean short
+        // circuiting, as Guava includes
+        // many annotations
+        || (annotName.endsWith(".ParametricNullness") && annotName.startsWith("com.google.common."))
+        || (config.acknowledgeAndroidRecent()
+            && annotName.equals("androidx.annotation.RecentlyNullable"))
+        || config.isCustomNullableAnnotation(annotName);
   }
 
-  public static boolean hasNullableAnnotation(Element element) {
-    return nullnessFromAnnotations(element) == Nullness.NULLABLE;
+  /**
+   * Check whether an annotation should be treated as equivalent to <code>@NonNull</code>.
+   *
+   * @param annotName annotation name
+   * @return true if we treat annotName as a <code>@NonNull</code> annotation, false otherwise
+   */
+  public static boolean isNonNullAnnotation(String annotName, Config config) {
+    return annotName.endsWith(".NonNull")
+        || annotName.endsWith(".NotNull")
+        || annotName.endsWith(".Nonnull")
+        || (config.acknowledgeAndroidRecent()
+            && annotName.equals("androidx.annotation.RecentlyNonNull"))
+        || config.isCustomNonnullAnnotation(annotName);
+  }
+
+  /**
+   * Does the symbol have a {@code @NonNull} declaration or type-use annotation?
+   *
+   * <p>NOTE: this method does not work for checking all annotations of parameters of methods from
+   * class files. For that case, use {@link #paramHasNullableAnnotation(Symbol.MethodSymbol, int,
+   * Config)}
+   */
+  public static boolean hasNonNullAnnotation(Symbol symbol, Config config) {
+    return hasNonNullAnnotation(NullabilityUtil.getAllAnnotations(symbol, config), config);
+  }
+
+  /**
+   * Does the symbol have a {@code @Nullable} declaration or type-use annotation?
+   *
+   * <p>NOTE: this method does not work for checking all annotations of parameters of methods from
+   * class files. For that case, use {@link #paramHasNullableAnnotation(Symbol.MethodSymbol, int,
+   * Config)}
+   */
+  public static boolean hasNullableAnnotation(Symbol symbol, Config config) {
+    return hasNullableAnnotation(NullabilityUtil.getAllAnnotations(symbol, config), config);
+  }
+
+  private static boolean hasNullableTypeUseAnnotation(Symbol symbol, Config config) {
+    return hasNullableAnnotation(NullabilityUtil.getTypeUseAnnotations(symbol, config), config);
+  }
+
+  /**
+   * Does the parameter of {@code symbol} at {@code paramInd} have a {@code @Nullable} declaration
+   * or type-use annotation? This method works for methods defined in either source or class files.
+   *
+   * <p>For a varargs parameter, this method returns true if <em>individual</em> arguments passed in
+   * the varargs positions can be null.
+   */
+  public static boolean paramHasNullableAnnotation(
+      Symbol.MethodSymbol symbol, int paramInd, Config config) {
+    // We treat the (generated) equals() method of record types to have a @Nullable parameter, as
+    // the generated implementation handles null (as required by the contract of Object.equals())
+    if (isRecordEqualsParam(symbol, paramInd)) {
+      return true;
+    }
+    if (symbol.isVarArgs()
+        && paramInd == symbol.getParameters().size() - 1
+        && !config.isLegacyAnnotationLocation()) {
+      return NullabilityUtil.nullableVarargsElementsForSourceOrBytecode(
+          symbol.getParameters().get(paramInd), config);
+    } else {
+      return hasNullableAnnotation(
+          NullabilityUtil.getAllAnnotationsForParameter(symbol, paramInd, config), config);
+    }
+  }
+
+  private static boolean isRecordEqualsParam(Symbol.MethodSymbol symbol, int paramInd) {
+    // Here we compare with toString() to preserve compatibility with JDK 11 (records only
+    // introduced in JDK 16)
+    if (!symbol.owner.getKind().toString().equals("RECORD")) {
+      return false;
+    }
+    if (!symbol.getSimpleName().contentEquals("equals")) {
+      return false;
+    }
+    // Check for a boolean return type and a single parameter of type java.lang.Object
+    Type type = symbol.type;
+    List<Type> parameterTypes = type.getParameterTypes();
+    if (!(type.getReturnType().toString().equals("boolean")
+        && parameterTypes != null
+        && parameterTypes.size() == 1
+        && parameterTypes.get(0).toString().equals("java.lang.Object"))) {
+      return false;
+    }
+    return paramInd == 0;
+  }
+
+  /**
+   * Does the parameter of {@code symbol} at {@code paramInd} have a {@code @NonNull} declaration or
+   * type-use annotation? This method works for methods defined in either source or class files.
+   *
+   * <p>For a varargs parameter, this method returns true if <em>individual</em> arguments passed in
+   * the varargs positions must be {@code @NonNull}.
+   */
+  public static boolean paramHasNonNullAnnotation(
+      Symbol.MethodSymbol symbol, int paramInd, Config config) {
+    if (symbol.isVarArgs()
+        && paramInd == symbol.getParameters().size() - 1
+        && !config.isLegacyAnnotationLocation()) {
+      return NullabilityUtil.nonnullVarargsElementsForSourceOrBytecode(
+          symbol.getParameters().get(paramInd), config);
+    } else {
+      return hasNonNullAnnotation(
+          NullabilityUtil.getAllAnnotationsForParameter(symbol, paramInd, config), config);
+    }
+  }
+
+  /**
+   * Does the varargs parameter {@code paramSymbol} have a {@code @Nullable} annotation indicating
+   * that the argument array passed at a call site can be {@code null}? Syntactically, this would be
+   * written as {@code foo(Object @Nullable... args}}
+   */
+  public static boolean varargsArrayIsNullable(Symbol paramSymbol, Config config) {
+    return hasNullableTypeUseAnnotation(paramSymbol, config)
+        || (config.isLegacyAnnotationLocation()
+            && hasNullableDeclarationAnnotation(paramSymbol, config));
+  }
+
+  /** Checks if the symbol has a {@code @Nullable} declaration annotation */
+  public static boolean hasNullableDeclarationAnnotation(Symbol symbol, Config config) {
+    return hasNullableAnnotation(symbol.getRawAttributes().stream(), config);
+  }
+
+  /** Checks if the symbol has a {@code @NonNull} declaration annotation */
+  public static boolean hasNonNullDeclarationAnnotation(Symbol symbol, Config config) {
+    return hasNonNullAnnotation(symbol.getRawAttributes().stream(), config);
   }
 }

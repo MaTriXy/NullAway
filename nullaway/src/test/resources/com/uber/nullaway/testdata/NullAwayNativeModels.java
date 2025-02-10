@@ -37,6 +37,7 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.annotation.Nullable;
 import javax.lang.model.element.Element;
@@ -57,6 +58,10 @@ public class NullAwayNativeModels {
     Exception e = new RuntimeException();
     // BUG: Diagnostic contains: dereferenced expression
     e.getMessage().hashCode();
+    // BUG: Diagnostic contains: dereferenced expression
+    e.getLocalizedMessage().hashCode();
+    // BUG: Diagnostic contains: dereferenced expression
+    e.getCause().toString();
   }
 
   // we will add bug annotations when we have full support for maps
@@ -201,17 +206,55 @@ public class NullAwayNativeModels {
     }
   }
 
-  static void failIfNull(@Nullable Object o1, @Nullable Object o2) {
+  static void mapCheckWithPrimitiveUnboxing(int key) {
+    Map<Integer, Object> m = new HashMap<>();
+    if (m.containsKey(key)) {
+      m.get(key).hashCode();
+    }
+  }
+
+  static void mapCheckWithPrimitiveUnboxingLong(long key) {
+    Map<Integer, Object> m = new HashMap<>();
+    if (m.containsKey(key)) {
+      m.get(key).hashCode();
+    }
+  }
+
+  static void mapCheckWithStringConstantKey() {
+    Map<String, Object> m = new HashMap<>();
+    if (m.containsKey("key")) {
+      m.get("key").hashCode();
+    }
+  }
+
+  static void mapCheckWithIntConstantKey() {
+    Map<String, Object> m = new HashMap<>();
+    if (m.containsKey(42)) {
+      m.get(42).hashCode();
+    }
+  }
+
+  static void mapCheckWithWideningNode() {
+    Map<Long, String> m = new HashMap<>();
+    m.put(Long.valueOf(42), "");
+  }
+
+  static void failIfNull(
+      @Nullable Object o1,
+      @Nullable Object o2,
+      @Nullable Object o3,
+      @Nullable Object o4,
+      @Nullable Object o5) {
     org.junit.Assert.assertNotNull(o1);
     o1.toString();
     org.junit.Assert.assertNotNull("Null!", o2);
     o2.toString();
-    org.junit.jupiter.api.Assertions.assertNotNull(o1);
-    o1.toString();
-    org.junit.jupiter.api.Assertions.assertNotNull(o2, "Null!");
-    o2.toString();
-    org.junit.jupiter.api.Assertions.assertNotNull(o2, () -> "Null!");
-    o2.toString();
+    org.junit.jupiter.api.Assertions.assertNotNull(o3);
+    o3.toString();
+    org.junit.jupiter.api.Assertions.assertNotNull(o4, "Null!");
+    o4.toString();
+    org.junit.jupiter.api.Assertions.assertNotNull(o5, () -> "Null!");
+    o5.toString();
   }
 
   static void nonNullParameters() {
@@ -224,6 +267,8 @@ public class NullAwayNativeModels {
     File f = new File(s);
     // BUG: Diagnostic contains: passing @Nullable parameter 'null' where @NonNull is required
     URLClassLoader.newInstance(null, NullAwayNativeModels.class.getClassLoader());
+    // BUG: Diagnostic contains: passing @Nullable parameter 'null' where @NonNull is required
+    Optional<Object> op = Optional.of(null);
   }
 
   static void elementStuff(Element e, Elements elems) {
@@ -253,8 +298,9 @@ public class NullAwayNativeModels {
     d.offer(null);
     // BUG: Diagnostic contains: passing @Nullable parameter 'null' where @NonNull is required
     d.push(null);
-    // BUG: Diagnostic contains: passing @Nullable parameter 'null' where @NonNull is required
-    d.toArray(null);
+    Object[] o = null;
+    // BUG: Diagnostic contains: passing @Nullable parameter 'o' where @NonNull is required
+    d.toArray(o);
     // this should be fine
     d.toArray();
   }
@@ -275,8 +321,9 @@ public class NullAwayNativeModels {
     d.offer(null);
     // BUG: Diagnostic contains: passing @Nullable parameter 'null' where @NonNull is required
     d.push(null);
-    // BUG: Diagnostic contains: passing @Nullable parameter 'null' where @NonNull is required
-    d.toArray(null);
+    Object[] o = null;
+    // BUG: Diagnostic contains: passing @Nullable parameter 'o' where @NonNull is required
+    d.toArray(o);
   }
 
   static void guavaStuff() {
@@ -306,6 +353,19 @@ public class NullAwayNativeModels {
     if (!android.text.TextUtils.isEmpty(s)) {
       // no warning due to isEmpty check
       s.hashCode();
+    }
+  }
+
+  static void apacheCommonsStuff() {
+    String s = null;
+    if (!org.apache.commons.lang.StringUtils.isEmpty(s)) {
+      // no warning due to isEmpty check
+      s.hashCode();
+    }
+    String t = null;
+    if (!org.apache.commons.lang3.StringUtils.isEmpty(t)) {
+      // no warning due to isEmpty check
+      t.hashCode();
     }
   }
 }

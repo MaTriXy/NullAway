@@ -22,26 +22,41 @@
 
 package com.uber.nullaway;
 
-import com.google.common.base.Preconditions;
-import com.google.common.collect.ImmutableCollection;
+import com.google.auto.value.AutoValue;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
-import com.google.errorprone.util.ASTHelpers;
 import com.sun.tools.javac.code.Symbol;
-import com.sun.tools.javac.code.Types;
+import com.uber.nullaway.handlers.stream.StreamTypeRecord;
 import java.util.Objects;
-import javax.annotation.Nullable;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Provides models for library routines for the null checker. */
 public interface LibraryModels {
 
   /**
+   * Get methods which fail/error out when passed null.
+   *
    * @return map from the names of null-rejecting methods to the indexes of the arguments that
    *     aren't permitted to be null.
    */
   ImmutableSetMultimap<MethodRef, Integer> failIfNullParameters();
 
   /**
+   * Get (method, parameter) pairs that must be modeled as if explicitly annotated with @Nullable.
+   *
+   * @return map from the names of methods with @Nullable parameters to the indexes of the arguments
+   *     that are @Nullable.
+   *     <p>This is taken into account for override checks, requiring methods that override the
+   *     methods listed here to take @Nullable parameters on the same indexes. The main use for this
+   *     is to document which API callbacks can be passed null values.
+   */
+  ImmutableSetMultimap<MethodRef, Integer> explicitlyNullableParameters();
+
+  /**
+   * Get (method, parameter) pairs that must be modeled as @NonNull.
+   *
    * @return map from the names of methods with @NonNull parameters to the indexes of the arguments
    *     that are @NonNull.
    *     <p>Note that these methods are different from the {@link #failIfNullParameters()} methods,
@@ -53,16 +68,117 @@ public interface LibraryModels {
   ImmutableSetMultimap<MethodRef, Integer> nonNullParameters();
 
   /**
+   * Get (method, parameter) pairs that cause the method to return <code>true</code> when null.
+   *
    * @return map from the names of null-querying methods to the indexes of the arguments that are
    *     compared against null.
    */
   ImmutableSetMultimap<MethodRef, Integer> nullImpliesTrueParameters();
 
-  /** @return set of library methods that may return null */
+  /**
+   * Get (method, parameter) pairs that cause the method to return <code>false</code> when null.
+   *
+   * @return map from the names of non-null-querying methods to the indexes of the arguments that
+   *     are compared against null.
+   */
+  ImmutableSetMultimap<MethodRef, Integer> nullImpliesFalseParameters();
+
+  /**
+   * Get (method, parameter) pairs that cause the method to return <code>null</code> when passed
+   * <code>null</code> on that parameter.
+   *
+   * <p>This is equivalent to annotating a method with both a {@code @Nullable} return type
+   * <em>and</em> a {@code @Contract} annotation specifying that if the parameter is
+   * {@code @NonNull} then the return is {@code @NonNull}, e.g.:
+   *
+   * <pre><code>@Contract("!null -&gt; !null") @Nullable</code></pre>
+   *
+   * @return map from the names of null-in-implies-null out methods to the indexes of the arguments
+   *     that determine nullness of the return.
+   */
+  ImmutableSetMultimap<MethodRef, Integer> nullImpliesNullParameters();
+
+  /**
+   * Get the set of library methods that may return null.
+   *
+   * @return set of library methods that may return null
+   */
   ImmutableSet<MethodRef> nullableReturns();
 
   /**
-   * representation of a method as a qualified class name + a signature for the method
+   * Get the set of library methods that are assumed not to return null.
+   *
+   * @return set of library methods that are assumed not to return null
+   */
+  ImmutableSet<MethodRef> nonNullReturns();
+
+  /**
+   * Get the (className, type argument index) pairs for library classes where the generic type
+   * argument has a {@code @Nullable} upper bound. Only used in JSpecify mode.
+   *
+   * @return map from the className to the positions of the generic type arguments that have a
+   *     {@code Nullable} upper bound.
+   */
+  default ImmutableSetMultimap<String, Integer> typeVariablesWithNullableUpperBounds() {
+    return ImmutableSetMultimap.of();
+  }
+
+  /**
+   * Get the set of library classes that are NullMarked. Only used in JSpecify mode.
+   *
+   * @return set of library classes that are NullMarked.
+   */
+  default ImmutableSet<String> nullMarkedClasses() {
+    return ImmutableSet.of();
+  }
+
+  /**
+   * Get (method, parameter) pairs that act as castToNonNull(...) methods.
+   *
+   * <p>Here, the parameter index determines the argument position of the reference being cast to
+   * non-null.
+   *
+   * <p>We still provide the CLI configuration `-XepOpt:NullAway:CastToNonNullMethod` as the default
+   * way to define the common case of a single-argument {@code @NonNull Object
+   * castToNonNull(@Nullable Object o)}} cast method.
+   *
+   * <p>However, in some cases, the user might wish to have a cast method that takes multiple
+   * arguments, in addition to the <code>@Nullable</code> value being cast. For these cases,
+   * providing a library model allows for more precise error reporting whenever a known non-null
+   * value is passed to such method, rendering the cast unnecessary.
+   *
+   * <p>Note that we can't auto-add castToNonNull(...) methods taking more than one argument, simply
+   * because there might be no general, automated way of synthesizing the required arguments.
+   */
+  ImmutableSetMultimap<MethodRef, Integer> castToNonNullMethods();
+
+  /**
+   * Get the set of library fields that may be {@code null}.
+   *
+   * @return set of library fields that may be {@code null}.
+   */
+  default ImmutableSet<FieldRef> nullableFields() {
+    return ImmutableSet.of();
+  }
+
+  /**
+   * Get a list of custom stream library specifications.
+   *
+   * <p>This allows users to define filter/map/other methods for APIs which behave similarly to Java
+   * 8 streams or ReactiveX streams, so that NullAway is able to understand nullability invariants
+   * across stream API calls. See {@link com.uber.nullaway.handlers.stream.StreamModelBuilder} for
+   * details on how to construct these {@link com.uber.nullaway.handlers.stream.StreamTypeRecord}
+   * specs. A full example is available at {@link
+   * com.uber.nullaway.testlibrarymodels.TestLibraryModels}.
+   *
+   * @return A list of StreamTypeRecord specs (usually generated using StreamModelBuilder).
+   */
+  default ImmutableList<StreamTypeRecord> customStreamNullabilitySpecs() {
+    return ImmutableList.of();
+  }
+
+  /**
+   * Representation of a method as a qualified class name + a signature for the method
    *
    * <p>The formatting of a method signature should match the result of calling {@link
    * Symbol.MethodSymbol#toString()} on the corresponding symbol. See {@link
@@ -70,8 +186,8 @@ public interface LibraryModels {
    * principles:
    *
    * <ul>
-   *   <li>signature is a method name plus argument types, e.g., <code>foo(java.lang.Object,
-   *  java.lang.String)</code>
+   *   <li>signature is a method name plus argument types, with no spaces between the argument
+   *       types, e.g., <code>foo(java.lang.Object,java.lang.String)</code>
    *   <li>constructor for class Foo looks like <code>Foo(java.lang.String)</code>
    *   <li>If the method has its own type parameters, they need to be declared, like <code>
    *       &lt;T&gt;checkNotNull(T)</code>
@@ -80,88 +196,110 @@ public interface LibraryModels {
    *  </code>
    * </ul>
    */
-  final class MethodRef {
+  public final class MethodRef {
 
-    public final String clazz;
-    public final String methodSig;
+    public final String enclosingClass;
 
-    private MethodRef(String clazz, String methodSig) {
-      this.clazz = clazz;
-      this.methodSig = methodSig;
+    /**
+     * we store the method name separately to enable fast comparison with MethodSymbols. See {@link
+     * com.uber.nullaway.handlers.LibraryModelsHandler.OptimizedLibraryModels}
+     */
+    public final String methodName;
+
+    public final String fullMethodSig;
+
+    private MethodRef(String enclosingClass, String methodName, String fullMethodSig) {
+      this.enclosingClass = enclosingClass;
+      this.methodName = methodName;
+      this.fullMethodSig = fullMethodSig;
     }
 
     /**
-     * @param clazz containing class
-     * @param methodSig method signature in the appropriate format (see class docs)
-     * @return corresponding {@link MethodRef}
+     * Pattern for parsing method signatures. The signature should be in the format: {@code
+     * <T1,T2,...>methodName(ArgType1,ArgType2,...)}.
+     *
+     * @see #methodRef(String, String)
      */
-    public static MethodRef methodRef(Class<?> clazz, String methodSig) {
-      return methodRef(clazz.getName(), methodSig);
-    }
+    private static final Pattern METHOD_SIG_PATTERN =
+        Pattern.compile("^(<.*>)?(\\w+|<init>)(\\(.*\\))$");
 
     /**
-     * @param clazz containing class
-     * @param methodSig method signature in the appropriate format (see class docs)
+     * Construct a method reference.
+     *
+     * @param enclosingClass containing class
+     * @param methodSignature method signature in the appropriate format (see class docs)
      * @return corresponding {@link MethodRef}
      */
-    public static MethodRef methodRef(String clazz, String methodSig) {
-      Preconditions.checkArgument(
-          isValidMethodSig(methodSig), methodSig + " is not a valid method signature");
-      return new MethodRef(clazz, methodSig);
-    }
-
-    private static boolean isValidMethodSig(String methodSig) {
-      // some basic checking to make sure it's not just a method name
-      return methodSig.contains("(") && methodSig.contains(")");
+    public static MethodRef methodRef(String enclosingClass, String methodSignature) {
+      Matcher matcher = METHOD_SIG_PATTERN.matcher(methodSignature);
+      if (matcher.find()) {
+        String methodName = matcher.group(2);
+        if (methodName.equals(enclosingClass.substring(enclosingClass.lastIndexOf('.') + 1))) {
+          // constructor
+          methodName = "<init>";
+        }
+        return new MethodRef(enclosingClass, methodName, methodSignature);
+      } else {
+        throw new IllegalArgumentException("malformed method signature " + methodSignature);
+      }
     }
 
     public static MethodRef fromSymbol(Symbol.MethodSymbol symbol) {
-      return methodRef(symbol.owner.getQualifiedName().toString(), symbol.toString());
+      String methodStr = stripAnnotationsFromMethodSymbolString(symbol.toString());
+
+      return new MethodRef(
+          symbol.owner.getQualifiedName().toString(), symbol.name.toString(), methodStr);
+    }
+
+    /**
+     * Strip annotations from a method symbol string. The logic is specialized to work for strings
+     * produced by {@link Symbol.MethodSymbol#toString()} and will not work for arbitrary strings.
+     */
+    private static String stripAnnotationsFromMethodSymbolString(String str) {
+      return str.replaceAll("@[^ ]+ ", "");
     }
 
     @Override
-    public boolean equals(Object obj) {
-      if (obj instanceof MethodRef) {
-        MethodRef other = (MethodRef) obj;
-        return clazz.equals(other.clazz) && methodSig.equals(other.methodSig);
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
       }
-      return false;
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+      MethodRef methodRef = (MethodRef) o;
+      return Objects.equals(enclosingClass, methodRef.enclosingClass)
+          && Objects.equals(fullMethodSig, methodRef.fullMethodSig);
     }
 
     @Override
     public int hashCode() {
-      return Objects.hash(clazz, methodSig);
+      return Objects.hash(enclosingClass, fullMethodSig);
     }
 
     @Override
     public String toString() {
-      return "MethodRef{" + "clazz='" + clazz + '\'' + ", methodSig='" + methodSig + '\'' + '}';
+      return "MethodRef{"
+          + "enclosingClass='"
+          + enclosingClass
+          + '\''
+          + ", fullMethodSig='"
+          + fullMethodSig
+          + '\''
+          + '}';
     }
   }
 
-  /** utility methods for dealing with library models */
-  final class LibraryModelUtil {
+  /** Representation of a field as a qualified class name + a field name */
+  @AutoValue
+  abstract class FieldRef {
 
-    private LibraryModelUtil() {}
+    public abstract String getEnclosingClassName();
 
-    public static boolean hasNullableReturn(
-        LibraryModels models, Symbol.MethodSymbol symbol, Types types) {
-      // need to check if symbol is in the model or if it overrides a method in the model
-      return methodInSet(symbol, types, models.nullableReturns()) != null;
-    }
+    public abstract String getFieldName();
 
-    @Nullable
-    private static Symbol.MethodSymbol methodInSet(
-        Symbol.MethodSymbol symbol, Types types, ImmutableCollection<MethodRef> memberNames) {
-      if (memberNames.contains(MethodRef.fromSymbol(symbol))) {
-        return symbol;
-      }
-      for (Symbol.MethodSymbol superSymbol : ASTHelpers.findSuperMethods(symbol, types)) {
-        if (memberNames.contains(MethodRef.fromSymbol(superSymbol))) {
-          return superSymbol;
-        }
-      }
-      return null;
+    public static FieldRef fieldRef(String enclosingClass, String fieldName) {
+      return new AutoValue_LibraryModels_FieldRef(enclosingClass, fieldName);
     }
   }
 }

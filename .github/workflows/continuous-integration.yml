@@ -1,0 +1,105 @@
+name: Continuous integration
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    name: "JDK ${{ matrix.java }} on ${{ matrix.os }} with Error Prone ${{ matrix.epVersion }}"
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            java: 11
+            epVersion: 2.14.0
+          - os: ubuntu-latest
+            java: 17
+            epVersion: 2.14.0
+          # last version of Error Prone that supports Java 11
+          - os: ubuntu-latest
+            java: 11
+            epVersion: 2.31.0
+          - os: macos-latest
+            java: 17
+            epVersion: 2.36.0
+          - os: windows-latest
+            java: 17
+            epVersion: 2.36.0
+          - os: ubuntu-latest
+            java: 17
+            epVersion: 2.36.0
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out NullAway sources
+        uses: actions/checkout@v4
+      - name: 'Set up JDKs'
+        uses: actions/setup-java@v4
+        with:
+          java-version: |
+            21
+            17
+            ${{ matrix.java }}
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Build and test using Java ${{ matrix.java }} and Error Prone ${{ matrix.epVersion }}
+        env:
+          ORG_GRADLE_PROJECT_epApiVersion: ${{ matrix.epVersion }}
+        run: ./gradlew build
+      - name: Run shellcheck
+        run: ./gradlew shellcheck
+        if: runner.os == 'Linux'
+      - name: Aggregate jacoco coverage
+        id: jacoco_report
+        env:
+          ORG_GRADLE_PROJECT_epApiVersion: ${{ matrix.epVersion }}
+        run: ./gradlew codeCoverageReport
+        continue-on-error: true
+        if: runner.os == 'Linux' && matrix.java == '17' && matrix.epVersion == '2.36.0' && github.repository == 'uber/NullAway'
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./code-coverage-report/build/reports/jacoco/codeCoverageReport/codeCoverageReport.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+        if: steps.jacoco_report.outcome == 'success'
+      - name: Test publishToMavenLocal flow
+        env:
+          ORG_GRADLE_PROJECT_epApiVersion: ${{ matrix.epVersion }}
+          ORG_GRADLE_PROJECT_VERSION_NAME: '0.0.0.1-LOCAL'
+          ORG_GRADLE_PROJECT_RELEASE_SIGNING_ENABLED: 'false'
+        run: ./gradlew publishToMavenLocal
+        if: matrix.java == '17'
+      - name: Check that Git tree is clean after build and test
+        run: ./.buildscript/check_git_clean.sh
+  caffeine-gradle-task:
+    name: "Build Caffeine with snapshot"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+      - name: 'Set up JDKs'
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: 'temurin'
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Publish to Maven Local
+        env:
+          ORG_GRADLE_PROJECT_RELEASE_SIGNING_ENABLED: 'false'
+        run: ./gradlew publishToMavenLocal
+      - name: Create a temporary directory for Caffeine
+        run: mkdir -p /tmp/caffeine
+      - name: Clone Caffeine repository
+        run: git clone --depth 1 https://github.com/ben-manes/caffeine.git /tmp/caffeine
+      - name: Run caffeine build
+        run: |
+          cp .github/workflows/caffeine-use-snapshot.gradle.kts /tmp/caffeine
+          cd /tmp/caffeine
+          ./gradlew --init-script caffeine-use-snapshot.gradle.kts build -x test -x javadoc

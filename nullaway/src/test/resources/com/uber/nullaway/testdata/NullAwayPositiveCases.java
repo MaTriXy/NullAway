@@ -283,6 +283,12 @@ public class NullAwayPositiveCases {
     arr.toString();
   }
 
+  static void onlyReportOneField(@Nullable Inner i) {
+    // BUG: Diagnostic contains: dereferenced expression
+    i.f1 = null;
+    i.toString();
+  }
+
   static void testCast(@Nullable Object o) {
     String x = (String) o;
     // BUG: Diagnostic contains: dereferenced expression
@@ -327,6 +333,9 @@ public class NullAwayPositiveCases {
     Boolean z = null;
     // BUG: Diagnostic contains: unboxing
     int d = z ? 3 : 4;
+    Integer w = null;
+    // BUG: Diagnostic contains: unboxing
+    int e = ~w;
   }
 
   static void unboxingTests2() {
@@ -382,8 +391,12 @@ public class NullAwayPositiveCases {
     // BUG: Diagnostic contains: unboxing
     g("", b ? null : 0);
     // SHOULDBUSG: Diagnostic contains: unboxing
+    // BUG: Diagnostic contains: passing @Nullable parameter 'b ? null : 0' where @NonNull is
+    // required
     h("", 1, b ? null : 0);
     // SHOULDBUSG: Diagnostic contains: unboxing
+    // BUG: Diagnostic contains: passing @Nullable parameter 'b ? null : 0' where @NonNull is
+    // required
     h("", 1, b ? null : 0, 3);
     // BUG: Diagnostic contains: unboxing
     int z = 0 + (b ? null : 1);
@@ -420,6 +433,14 @@ public class NullAwayPositiveCases {
     static int fizz(@org.checkerframework.checker.nullness.qual.Nullable String str) {
       // BUG: Diagnostic contains: dereferenced expression
       return str.hashCode();
+    }
+
+    static void fizz2(
+        Object o, @org.checkerframework.checker.nullness.qual.Nullable Object p, Object q) {}
+
+    static void caller() {
+      // BUG: Diagnostic contains: passing @Nullable parameter 'null'
+      fizz2(new Object(), new Object(), null);
     }
 
     Object retNonNull() {
